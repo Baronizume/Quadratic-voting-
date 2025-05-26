@@ -1,0 +1,235 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+/**
+ * @title QuadraticVoting
+ * @dev Implementation of quadratic voting mechanism for democratic decision making
+ * @author Quadratic Voting Implementation Team
+ */
+contract QuadraticVoting {
+    
+    struct Proposal {
+        uint256 id;
+        string title;
+        string description;
+        uint256 votingEndTime;
+        uint256 totalVotes;
+        bool executed;
+        mapping(address => uint256) voterCredits;
+        mapping(address => bool) hasVoted;
+    }
+    
+    struct Voter {
+        bool isRegistered;
+        uint256 totalCredits;
+        uint256 usedCredits;
+    }
+    
+    mapping(uint256 => Proposal) public proposals;
+    mapping(address => Voter) public voters;
+    
+    uint256 public proposalCounter;
+    uint256 public constant INITIAL_CREDITS = 100;
+    address public admin;
+    
+    event ProposalCreated(uint256 indexed proposalId, string title, uint256 votingEndTime);
+    event VoteCast(uint256 indexed proposalId, address indexed voter, uint256 credits, uint256 votes);
+    event VoterRegistered(address indexed voter, uint256 credits);
+    event ProposalExecuted(uint256 indexed proposalId, uint256 totalVotes);
+    
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "Only admin can perform this action");
+        _;
+    }
+    
+    modifier onlyRegisteredVoter() {
+        require(voters[msg.sender].isRegistered, "Voter not registered");
+        _;
+    }
+    
+    modifier proposalExists(uint256 _proposalId) {
+        require(_proposalId > 0 && _proposalId <= proposalCounter, "Proposal does not exist");
+        _;
+    }
+    
+    constructor() {
+        admin = msg.sender;
+    }
+    
+    /**
+     * @dev Core Function 1: Register a new voter with initial credits
+     * @param _voter Address of the voter to register
+     */
+    function registerVoter(address _voter) external onlyAdmin {
+        require(!voters[_voter].isRegistered, "Voter already registered");
+        require(_voter != address(0), "Invalid voter address");
+        
+        voters[_voter] = Voter({
+            isRegistered: true,
+            totalCredits: INITIAL_CREDITS,
+            usedCredits: 0
+        });
+        
+        emit VoterRegistered(_voter, INITIAL_CREDITS);
+    }
+    
+    /**
+     * @dev Core Function 2: Create a new proposal for voting
+     * @param _title Title of the proposal
+     * @param _description Detailed description of the proposal
+     * @param _votingDuration Duration of voting period in seconds
+     */
+    function createProposal(
+        string memory _title,
+        string memory _description,
+        uint256 _votingDuration
+    ) external onlyAdmin returns (uint256) {
+        require(bytes(_title).length > 0, "Title cannot be empty");
+        require(_votingDuration > 0, "Voting duration must be positive");
+        
+        proposalCounter++;
+        uint256 proposalId = proposalCounter;
+        
+        Proposal storage newProposal = proposals[proposalId];
+        newProposal.id = proposalId;
+        newProposal.title = _title;
+        newProposal.description = _description;
+        newProposal.votingEndTime = block.timestamp + _votingDuration;
+        newProposal.totalVotes = 0;
+        newProposal.executed = false;
+        
+        emit ProposalCreated(proposalId, _title, newProposal.votingEndTime);
+        return proposalId;
+    }
+    
+    /**
+     * @dev Core Function 3: Cast quadratic votes on a proposal
+     * @param _proposalId ID of the proposal to vote on
+     * @param _credits Number of credits to spend (votes = sqrt(credits))
+     */
+    function castVote(uint256 _proposalId, uint256 _credits) 
+        external 
+        onlyRegisteredVoter 
+        proposalExists(_proposalId) 
+    {
+        Proposal storage proposal = proposals[_proposalId];
+        require(block.timestamp < proposal.votingEndTime, "Voting period has ended");
+        require(_credits > 0, "Credits must be positive");
+        require(!proposal.hasVoted[msg.sender], "Already voted on this proposal");
+        
+        Voter storage voter = voters[msg.sender];
+        require(voter.usedCredits + _credits <= voter.totalCredits, "Insufficient credits");
+        
+        // Calculate quadratic votes: votes = sqrt(credits)
+        uint256 votes = sqrt(_credits);
+        require(votes > 0, "Invalid vote calculation");
+        
+        // Update voter state
+        voter.usedCredits += _credits;
+        proposal.voterCredits[msg.sender] = _credits;
+        proposal.hasVoted[msg.sender] = true;
+        
+        // Update proposal state
+        proposal.totalVotes += votes;
+        
+        emit VoteCast(_proposalId, msg.sender, _credits, votes);
+    }
+    
+    /**
+     * @dev Get proposal details
+     * @param _proposalId ID of the proposal
+     */
+    function getProposal(uint256 _proposalId) 
+        external 
+        view 
+        proposalExists(_proposalId) 
+        returns (
+            uint256 id,
+            string memory title,
+            string memory description,
+            uint256 votingEndTime,
+            uint256 totalVotes,
+            bool executed
+        ) 
+    {
+        Proposal storage proposal = proposals[_proposalId];
+        return (
+            proposal.id,
+            proposal.title,
+            proposal.description,
+            proposal.votingEndTime,
+            proposal.totalVotes,
+            proposal.executed
+        );
+    }
+    
+    /**
+     * @dev Get voter information
+     * @param _voter Address of the voter
+     */
+    function getVoterInfo(address _voter) 
+        external 
+        view 
+        returns (
+            bool isRegistered,
+            uint256 totalCredits,
+            uint256 usedCredits,
+            uint256 remainingCredits
+        ) 
+    {
+        Voter storage voter = voters[_voter];
+        return (
+            voter.isRegistered,
+            voter.totalCredits,
+            voter.usedCredits,
+            voter.totalCredits - voter.usedCredits
+        );
+    }
+    
+    /**
+     * @dev Check if voter has voted on a specific proposal
+     * @param _proposalId ID of the proposal
+     * @param _voter Address of the voter
+     */
+    function hasVotedOnProposal(uint256 _proposalId, address _voter) 
+        external 
+        view 
+        proposalExists(_proposalId) 
+        returns (bool) 
+    {
+        return proposals[_proposalId].hasVoted[_voter];
+    }
+    
+    /**
+     * @dev Execute a proposal (can be extended with actual execution logic)
+     * @param _proposalId ID of the proposal to execute
+     */
+    function executeProposal(uint256 _proposalId) 
+        external 
+        onlyAdmin 
+        proposalExists(_proposalId) 
+    {
+        Proposal storage proposal = proposals[_proposalId];
+        require(block.timestamp >= proposal.votingEndTime, "Voting period not ended");
+        require(!proposal.executed, "Proposal already executed");
+        
+        proposal.executed = true;
+        emit ProposalExecuted(_proposalId, proposal.totalVotes);
+    }
+    
+    /**
+     * @dev Calculate square root using Babylonian method
+     * @param x Number to calculate square root of
+     * @return Square root of x
+     */
+    function sqrt(uint256 x) internal pure returns (uint256) {
+        if (x == 0) return 0;
+        uint256 z = (x + 1) / 2;
+        uint256 y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        }
+        return y;
+    }
+}
